@@ -394,6 +394,6 @@ export default function Home() {
     </section>
     <input ref={fileInputRef} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(e:ChangeEvent<HTMLInputElement>)=>{const f=e.target.files?.[0];if(f)loadFile(f);e.target.value="";}}/>
     {candidate&&<CropDialog candidate={candidate} onCancel={()=>setCandidate(null)} onUseOriginal={()=>commitPlan(candidate.image,candidate.file)} onCrop={applyCrop}/>} 
-    {toast&&<button className="toast" onClick={()=>setToast("")}>{toast}<span>×</span></button>}
+    {toast&&<button className="toast" onClick={()=>setToast("")}>{toast.replace("已复制透明 PNG","已复制白色图布 PNG")}<span>×</span></button>}
   </main>;
 }
