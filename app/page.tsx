@@ -64,6 +64,7 @@ function drawArchitecturalDimension(
   width: number,
   dashed = false,
   origin: Point = {x:0,y:0},
+  fontSizeOverride?: number,
 ) {
   const { start, end } = line;
   const angle = Math.atan2(end.y - start.y, end.x - start.x);
@@ -74,7 +75,7 @@ function drawArchitecturalDimension(
   const dimEnd = {x:baseEnd.x+nx*line.offset,y:baseEnd.y+ny*line.offset};
   const extension = Math.max(13, width * 7);
   const tick = Math.max(9, width * 5);
-  const fontSize = Math.max(17, width * 8.5);
+  const fontSize = fontSizeOverride ?? Math.max(17, width * 8.5);
   ctx.save();
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
@@ -207,6 +208,7 @@ export default function Home() {
   const [knownUnit, setKnownUnit] = useState<Unit>("mm");
   const [displayUnit, setDisplayUnit] = useState<Unit>("mm");
   const [showUnit, setShowUnit] = useState(true);
+  const [dimensionFontSize, setDimensionFontSize] = useState(28);
   const [ortho, setOrtho] = useState(true);
   const [osnap, setOsnap] = useState(true);
   const [zoom, setZoom] = useState(1);
@@ -248,20 +250,21 @@ export default function Home() {
     ctx.drawImage(plan,boardPadding,boardPadding);
     const width = Math.max(1.5, Math.min(plan.naturalWidth, plan.naturalHeight) / 1000 * 1.8);
     const origin={x:boardPadding,y:boardPadding};
-    if (calibration&&showCalibration) drawArchitecturalDimension(ctx, {...calibration,offset:0}, "校准基准", "#eb7b42", width, true,origin);
-    if (scaleMmPerPixel) measurements.forEach(line => drawArchitecturalDimension(ctx, line, formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit), line.id===selectedId?"#00a994":"#b82933", width, false,origin));
+    if (calibration&&showCalibration) drawArchitecturalDimension(ctx, {...calibration,offset:0}, "校准基准", "#eb7b42", width, true,origin,dimensionFontSize);
+    if (scaleMmPerPixel) measurements.forEach(line => drawArchitecturalDimension(ctx, line, formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit), line.id===selectedId?"#00a994":"#b82933", width, false,origin,dimensionFontSize));
     if (activeStart && hoverPoint) {
       const previewEnd=activeEnd??hoverPoint;
       const offset=tool==="calibrate"?0:activeEnd?perpendicularOffset(activeStart,activeEnd,hoverPoint):tool==="chain"&&chainVector?reusedOffset(activeStart,hoverPoint,chainVector):0;
       const draft:Dimension = {id:"draft",start:activeStart,end:previewEnd,offset};
       const label = tool === "calibrate" || (!activeEnd&&!chainVector) ? "" : scaleMmPerPixel ? formatLength(dist(activeStart,previewEnd)*scaleMmPerPixel,displayUnit,showUnit) : "";
-      drawArchitecturalDimension(ctx,draft,label,"#0b8d7b",width,true,origin);
+      drawArchitecturalDimension(ctx,draft,label,"#0b8d7b",width,true,origin,dimensionFontSize);
     }
-  }, [plan,boardPadding,calibration,showCalibration,measurements,scaleMmPerPixel,displayUnit,showUnit,selectedId,activeStart,activeEnd,chainVector,hoverPoint,tool]);
+  }, [plan,boardPadding,calibration,showCalibration,measurements,scaleMmPerPixel,displayUnit,showUnit,dimensionFontSize,selectedId,activeStart,activeEnd,chainVector,hoverPoint,tool]);
   useEffect(() => renderCanvas(), [renderCanvas]);
 
   const commitPlan = useCallback((image: HTMLImageElement, imageFile: File) => {
-    setPlan(image); setFile(imageFile); setCandidate(null); setCalibration(null); setMeasurements([]); setScaleMmPerPixel(null); setActiveStart(null); setActiveEnd(null); setChainVector(null); setSelectedId(null); setTool("calibrate"); setZoom(1); setPan({x:0,y:0}); setToast("图纸已载入：R 校准比例，F8 正交，F3 对象吸附");
+    const defaultFontSize=Math.round(Math.max(17,Math.min(400,Math.min(image.naturalWidth,image.naturalHeight)/1000*1.8*8.5)));
+    setPlan(image); setFile(imageFile); setCandidate(null); setCalibration(null); setMeasurements([]); setScaleMmPerPixel(null); setActiveStart(null); setActiveEnd(null); setChainVector(null); setSelectedId(null); setDimensionFontSize(defaultFontSize); setTool("calibrate"); setZoom(1); setPan({x:0,y:0}); setToast("图纸已载入：R 校准比例，F8 正交，F3 对象吸附");
   }, []);
 
   const loadFile = useCallback((nextFile: File) => {
@@ -397,8 +400,8 @@ export default function Home() {
     const ctx=output.getContext("2d");if(!ctx)return;
     ctx.fillStyle="#fff";ctx.fillRect(0,0,output.width,output.height);const origin={x:boardPadding,y:boardPadding};ctx.drawImage(plan,origin.x,origin.y);
     const width=Math.max(1.5,Math.min(plan.naturalWidth,plan.naturalHeight)/1000*1.8);
-    if(showCalibration&&calibration)drawArchitecturalDimension(ctx,{...calibration,offset:0},"校准基准","#eb7b42",width,true,origin);
-    if(scaleMmPerPixel)measurements.forEach(line=>drawArchitecturalDimension(ctx,line,formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit),"#b82933",width,false,origin));
+    if(showCalibration&&calibration)drawArchitecturalDimension(ctx,{...calibration,offset:0},"校准基准","#eb7b42",width,true,origin,dimensionFontSize);
+    if(scaleMmPerPixel)measurements.forEach(line=>drawArchitecturalDimension(ctx,line,formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit),"#b82933",width,false,origin,dimensionFontSize));
     return output;
   };
 
@@ -428,7 +431,7 @@ export default function Home() {
         {pendingCalibration&&<div className="dynamic-input"><span>指定实际长度</span><label><input autoFocus value={knownLength} onChange={e=>setKnownLength(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")confirmCalibration();}}/><select value={knownUnit} onChange={e=>setKnownUnit(e.target.value as Unit)}><option>mm</option><option>cm</option><option>m</option></select></label><button onClick={confirmCalibration}>确认</button></div>}
       </div>
 
-      <aside className="cad-properties"><div className="prop-title"><span>特性</span><strong>{tool==="select"?"选择与图层":tool==="calibrate"?"比例校准":tool==="chain"?"连续标注":"线性标注"}</strong></div><section><h3>图纸</h3><dl><div><dt>文件</dt><dd>{file?.name||"—"}</dd></div><div><dt>像素</dt><dd>{plan?`${plan.naturalWidth} × ${plan.naturalHeight}`:"—"}</dd></div><div><dt>比例</dt><dd className={scaleMmPerPixel?"ok":""}>{scaleMmPerPixel?`1 px = ${scaleMmPerPixel.toFixed(3)} mm`:"未校准"}</dd></div></dl></section><section><h3>尺寸样式</h3><label className="prop-field"><span>数值单位</span><select value={displayUnit} onChange={e=>setDisplayUnit(e.target.value as Unit)}><option>mm</option><option>cm</option><option>m</option></select></label><label className="prop-check"><input type="checkbox" checked={showUnit} onChange={e=>setShowUnit(e.target.checked)}/>在图中显示单位</label><label className="prop-check"><input type="checkbox" checked={showCalibration} onChange={e=>setShowCalibration(e.target.checked)}/>显示校准基准</label><small>单段标注的第三点可自由定位。逐点标注的第一段确定距离和方向，之后每点一次自动生成下一段。</small></section><section><h3>导出</h3><small>复制与保存均输出屏幕上的完整白色图布，图纸和全部标注保持同一范围。</small></section>{measurements.length>0&&<section className="layer-panel"><h3>标注图层</h3>{measurements.slice().reverse().map((line,index)=><button key={line.id} className={selectedId===line.id?"selected":""} onClick={()=>{setSelectedId(line.id);switchTool("select");}}><i>{measurements.length-index}</i><span>{scaleMmPerPixel?formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit):"尺寸"}</span><b onClick={e=>{e.stopPropagation();setMeasurements(v=>v.filter(item=>item.id!==line.id));if(selectedId===line.id)setSelectedId(null);}}>×</b></button>)}</section>}<section><h3>对象捕捉</h3><p>原点、偏移端点 · 中点 · 交点 · 水平/垂直对齐</p><small>尺寸线偏移后的两个端点也可直接吸附；F8 正交仍然优先。</small></section><section className="shortcut-card"><h3>快捷键</h3><dl><div><dt>V / Delete</dt><dd>选择 / 删除</dd></div><div><dt>R / D / C</dt><dd>校准 / 单段 / 逐点</dd></div><div><dt>F8 / F3</dt><dd>正交 / 对象捕捉</dd></div><div><dt>滚轮</dt><dd>仅缩放图纸</dd></div><div><dt>中键 / 空格</dt><dd>平移画布</dd></div></dl></section></aside>
+      <aside className="cad-properties"><div className="prop-title"><span>特性</span><strong>{tool==="select"?"选择与图层":tool==="calibrate"?"比例校准":tool==="chain"?"连续标注":"线性标注"}</strong></div><section><h3>图纸</h3><dl><div><dt>文件</dt><dd>{file?.name||"—"}</dd></div><div><dt>像素</dt><dd>{plan?`${plan.naturalWidth} × ${plan.naturalHeight}`:"—"}</dd></div><div><dt>比例</dt><dd className={scaleMmPerPixel?"ok":""}>{scaleMmPerPixel?`1 px = ${scaleMmPerPixel.toFixed(3)} mm`:"未校准"}</dd></div></dl></section><section><h3>尺寸样式</h3><label className="prop-field"><span>数值单位</span><select value={displayUnit} onChange={e=>setDisplayUnit(e.target.value as Unit)}><option>mm</option><option>cm</option><option>m</option></select></label><label className="prop-range"><span>文字大小 <b>{dimensionFontSize} px</b></span><input aria-label="标注文字大小" type="range" min="12" max="400" step="1" value={dimensionFontSize} onChange={e=>setDimensionFontSize(Number(e.target.value))}/><small>12</small><small>400</small></label><label className="prop-check"><input type="checkbox" checked={showUnit} onChange={e=>setShowUnit(e.target.checked)}/>在图中显示单位</label><label className="prop-check"><input type="checkbox" checked={showCalibration} onChange={e=>setShowCalibration(e.target.checked)}/>显示校准基准</label><small>单段标注的第三点可自由定位。逐点标注的第一段确定距离和方向，之后每点一次自动生成下一段。</small></section><section><h3>导出</h3><small>复制与保存均输出屏幕上的完整白色图布，图纸和全部标注保持同一范围。</small></section>{measurements.length>0&&<section className="layer-panel"><h3>标注图层</h3>{measurements.slice().reverse().map((line,index)=><button key={line.id} className={selectedId===line.id?"selected":""} onClick={()=>{setSelectedId(line.id);switchTool("select");}}><i>{measurements.length-index}</i><span>{scaleMmPerPixel?formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit):"尺寸"}</span><b onClick={e=>{e.stopPropagation();setMeasurements(v=>v.filter(item=>item.id!==line.id));if(selectedId===line.id)setSelectedId(null);}}>×</b></button>)}</section>}<section><h3>对象捕捉</h3><p>原点、偏移端点 · 中点 · 交点 · 水平/垂直对齐</p><small>尺寸线偏移后的两个端点也可直接吸附；F8 正交仍然优先。</small></section><section className="shortcut-card"><h3>快捷键</h3><dl><div><dt>V / Delete</dt><dd>选择 / 删除</dd></div><div><dt>R / D / C</dt><dd>校准 / 单段 / 逐点</dd></div><div><dt>F8 / F3</dt><dd>正交 / 对象捕捉</dd></div><div><dt>滚轮</dt><dd>仅缩放图纸</dd></div><div><dt>中键 / 空格</dt><dd>平移画布</dd></div></dl></section></aside>
 
       <footer className="cad-status"><div><button className={ortho?"on":""} onClick={()=>setOrtho(v=>!v)}><b>F8</b> 正交</button><button className={osnap?"on":""} onClick={()=>setOsnap(v=>!v)}><b>F3</b> 对象捕捉</button><span>十字光标</span></div><div><span>{measurements.length} 条尺寸</span><span>{Math.round(fitScale*zoom*100)}%</span><button onClick={resetView}>适合窗口</button></div></footer>
     </section>

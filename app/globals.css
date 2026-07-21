@@ -39,3 +39,9 @@
 .empty-actions button{height:32px;padding:0 15px;border:1px solid #9da8a4;border-radius:2px;background:#fff;color:#41504d;font-size:10px;cursor:pointer}
 .empty-actions button:hover{border-color:#258f81;color:#087e70}
 .empty-actions button.primary{border-color:#168f80;background:#168f80;color:#fff}
+.prop-range{margin-top:12px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:6px;font-size:9px}
+.prop-range>span{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;color:#59635f}
+.prop-range>span b{color:#087e70;font:600 10px Consolas}
+.prop-range input{grid-column:2;grid-row:2;width:100%;margin:0;accent-color:#168f80;cursor:pointer}
+.prop-range small{color:#929a97;font:8px Consolas}
+.prop-range small:last-child{text-align:right}
