@@ -75,17 +75,19 @@ function drawArchitecturalDimension(
     ctx.stroke();
   }
 
-  const mid = midpoint(dimStart, dimEnd);
-  ctx.font = `600 ${fontSize}px Arial, sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  const textWidth = ctx.measureText(label).width;
-  const boxW = textWidth + width * 10;
-  const boxH = fontSize + width * 5;
-  ctx.fillStyle = "rgba(255,255,255,.96)";
-  ctx.fillRect(mid.x - boxW / 2, mid.y - boxH / 2, boxW, boxH);
-  ctx.fillStyle = color;
-  ctx.fillText(label, mid.x, mid.y);
+  if(label){
+    const mid = midpoint(dimStart, dimEnd);
+    ctx.font = `600 ${fontSize}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const textWidth = ctx.measureText(label).width;
+    const boxW = textWidth + width * 10;
+    const boxH = fontSize + width * 5;
+    ctx.fillStyle = "rgba(255,255,255,.96)";
+    ctx.fillRect(mid.x - boxW / 2, mid.y - boxH / 2, boxW, boxH);
+    ctx.fillStyle = color;
+    ctx.fillText(label, mid.x, mid.y);
+  }
   ctx.restore();
 }
 
@@ -166,7 +168,6 @@ export default function Home() {
   const [pendingCalibration, setPendingCalibration] = useState<Line | null>(null);
   const [measurements, setMeasurements] = useState<Dimension[]>([]);
   const [activeStart, setActiveStart] = useState<Point | null>(null);
-  const [activeEnd, setActiveEnd] = useState<Point | null>(null);
   const [hoverPoint, setHoverPoint] = useState<Point | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [snap, setSnap] = useState<SnapResult | null>(null);
@@ -175,6 +176,8 @@ export default function Home() {
   const [knownUnit, setKnownUnit] = useState<Unit>("mm");
   const [displayUnit, setDisplayUnit] = useState<Unit>("mm");
   const [showUnit, setShowUnit] = useState(true);
+  const [dimensionSide, setDimensionSide] = useState<-1|1>(-1);
+  const [exportBackground, setExportBackground] = useState<"transparent"|"white">("transparent");
   const [ortho, setOrtho] = useState(true);
   const [osnap, setOsnap] = useState(true);
   const [zoom, setZoom] = useState(1);
@@ -185,7 +188,7 @@ export default function Home() {
   const panRef = useRef<{x:number;y:number;panX:number;panY:number}|null>(null);
   const spaceRef = useRef(false);
   const [cursor, setCursor] = useState<{x:number;y:number;visible:boolean}>({x:0,y:0,visible:false});
-  const [includeCalibration, setIncludeCalibration] = useState(false);
+  const [showCalibration, setShowCalibration] = useState(false);
   const [toast, setToast] = useState("");
   const boardPadding = plan ? Math.round(Math.max(plan.naturalWidth,plan.naturalHeight)*.22) : 0;
 
@@ -203,31 +206,37 @@ export default function Home() {
 
   const resetView = useCallback(() => { setZoom(1); setPan({x:0,y:0}); }, []);
 
+  const fixedDimensionOffset=useCallback((start:Point,end:Point)=>{
+    if(!plan)return 0;
+    const angle=Math.atan2(end.y-start.y,end.x-start.x),nx=-Math.sin(angle),ny=Math.cos(angle);
+    const horizontal=Math.abs(end.x-start.x)>=Math.abs(end.y-start.y);
+    const target=horizontal?{x:0,y:dimensionSide}:{x:dimensionSide,y:0};
+    const sign=Math.sign(nx*target.x+ny*target.y)||1;
+    return Math.max(plan.naturalWidth,plan.naturalHeight)*.065*sign;
+  },[plan,dimensionSide]);
+
   const renderCanvas = useCallback(() => {
     if (!plan || !canvasRef.current) return;
     const canvas = canvasRef.current;
     canvas.width = plan.naturalWidth+boardPadding*2; canvas.height = plan.naturalHeight+boardPadding*2;
     const ctx = canvas.getContext("2d"); if (!ctx) return;
-    ctx.fillStyle="#f7f7f4";ctx.fillRect(0,0,canvas.width,canvas.height);
     ctx.drawImage(plan,boardPadding,boardPadding);
-    ctx.strokeStyle="#aeb5b2";ctx.lineWidth=1;ctx.strokeRect(boardPadding-.5,boardPadding-.5,plan.naturalWidth+1,plan.naturalHeight+1);
     const width = Math.max(1.5, Math.min(plan.naturalWidth, plan.naturalHeight) / 1000 * 1.8);
     const origin={x:boardPadding,y:boardPadding};
-    if (calibration) drawArchitecturalDimension(ctx, {...calibration,offset:0}, "校准基准", "#eb7b42", width, true,origin);
+    if (calibration&&showCalibration) drawArchitecturalDimension(ctx, {...calibration,offset:0}, "校准基准", "#eb7b42", width, true,origin);
     if (scaleMmPerPixel) measurements.forEach(line => drawArchitecturalDimension(ctx, line, formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit), line.id===selectedId?"#00a994":"#b82933", width, false,origin));
     if (activeStart && hoverPoint) {
-      const previewEnd=activeEnd??hoverPoint;
-      const angle=Math.atan2(previewEnd.y-activeStart.y,previewEnd.x-activeStart.x),nx=-Math.sin(angle),ny=Math.cos(angle);
-      const offset=activeEnd?(hoverPoint.x-activeStart.x)*nx+(hoverPoint.y-activeStart.y)*ny:0;
+      const previewEnd=hoverPoint;
+      const offset=tool==="calibrate"?0:fixedDimensionOffset(activeStart,previewEnd);
       const draft:Dimension = {id:"draft",start:activeStart,end:previewEnd,offset};
-      const label = tool === "calibrate" ? "指定第二点" : scaleMmPerPixel ? formatLength(dist(activeStart,previewEnd)*scaleMmPerPixel,displayUnit,showUnit) : "指定第二点";
+      const label = tool === "calibrate" ? "" : scaleMmPerPixel ? formatLength(dist(activeStart,previewEnd)*scaleMmPerPixel,displayUnit,showUnit) : "";
       drawArchitecturalDimension(ctx,draft,label,"#0b8d7b",width,true,origin);
     }
-  }, [plan,boardPadding,calibration,measurements,scaleMmPerPixel,displayUnit,showUnit,selectedId,activeStart,activeEnd,hoverPoint,tool]);
+  }, [plan,boardPadding,calibration,showCalibration,measurements,scaleMmPerPixel,displayUnit,showUnit,selectedId,activeStart,hoverPoint,tool,fixedDimensionOffset]);
   useEffect(() => renderCanvas(), [renderCanvas]);
 
   const commitPlan = useCallback((image: HTMLImageElement, imageFile: File) => {
-    setPlan(image); setFile(imageFile); setCandidate(null); setCalibration(null); setMeasurements([]); setScaleMmPerPixel(null); setActiveStart(null); setActiveEnd(null); setSelectedId(null); setTool("calibrate"); setZoom(1); setPan({x:0,y:0}); setToast("图纸已载入：R 校准比例，F8 正交，F3 对象吸附");
+    setPlan(image); setFile(imageFile); setCandidate(null); setCalibration(null); setMeasurements([]); setScaleMmPerPixel(null); setActiveStart(null); setSelectedId(null); setTool("calibrate"); setZoom(1); setPan({x:0,y:0}); setToast("图纸已载入：R 校准比例，F8 正交，F3 对象吸附");
   }, []);
 
   const loadFile = (nextFile: File) => {
@@ -256,28 +265,28 @@ export default function Home() {
   const resolvePoint = useCallback((raw: Point, start: Point|null, shift=false): {point:Point;snap:SnapResult|null} => {
     if (!plan) return {point:raw,snap:null};
     const threshold=11/(fitScale*zoom);
+    const useOrtho=shift?!ortho:ortho;
+    let target=raw;
+    let axis:"horizontal"|"vertical"|null=null;
+    if(start&&useOrtho){const dx=Math.abs(raw.x-start.x),dy=Math.abs(raw.y-start.y);axis=dx>=dy?"horizontal":"vertical";target=axis==="horizontal"?{x:raw.x,y:start.y}:{x:start.x,y:raw.y};}
+    const keepOrtho=(p:Point)=>!start||!axis?p:axis==="horizontal"?{x:p.x,y:start.y}:{x:start.x,y:p.y};
     if (osnap) {
       const exact: {point:Point;kind:SnapKind;priority:number}[]=[];
       allLines.forEach(line=>{ exact.push({point:line.start,kind:"端点",priority:0},{point:line.end,kind:"端点",priority:0},{point:midpoint(line.start,line.end),kind:"中点",priority:2}); });
       for(let i=0;i<allLines.length;i++)for(let j=i+1;j<allLines.length;j++){const p=segmentIntersection(allLines[i],allLines[j]);if(p)exact.push({point:p,kind:"交点",priority:1});}
-      const near=exact.filter(c=>dist(c.point,raw)<=threshold).sort((a,b)=>a.priority-b.priority||dist(a.point,raw)-dist(b.point,raw))[0];
-      if(near)return {point:near.point,snap:{point:near.point,kind:near.kind}};
+      const near=exact.filter(c=>dist(c.point,target)<=threshold).sort((a,b)=>a.priority-b.priority||dist(a.point,target)-dist(b.point,target))[0];
+      if(near){const p=keepOrtho(near.point);return {point:p,snap:{point:p,kind:near.kind}};}
       const endpoints=allLines.flatMap(line=>[line.start,line.end]);
-      const nearX=endpoints.map(p=>({p,d:Math.abs(p.x-raw.x)})).filter(v=>v.d<=threshold).sort((a,b)=>a.d-b.d)[0];
-      const nearY=endpoints.map(p=>({p,d:Math.abs(p.y-raw.y)})).filter(v=>v.d<=threshold).sort((a,b)=>a.d-b.d)[0];
-      if(nearX||nearY){const p={x:nearX?nearX.p.x:raw.x,y:nearY?nearY.p.y:raw.y};return{point:p,snap:{point:p,kind:"对齐"}};}
+      if(!axis){const nearX=endpoints.map(p=>({p,d:Math.abs(p.x-target.x)})).filter(v=>v.d<=threshold).sort((a,b)=>a.d-b.d)[0];const nearY=endpoints.map(p=>({p,d:Math.abs(p.y-target.y)})).filter(v=>v.d<=threshold).sort((a,b)=>a.d-b.d)[0];if(nearX||nearY){const p={x:nearX?nearX.p.x:target.x,y:nearY?nearY.p.y:target.y};return{point:p,snap:{point:p,kind:"对齐"}};}}
     }
-    const useOrtho=shift?!ortho:ortho;
-    if(start&&useOrtho){const dx=Math.abs(raw.x-start.x),dy=Math.abs(raw.y-start.y);return{point:dx>=dy?{x:raw.x,y:start.y}:{x:start.x,y:raw.y},snap:null};}
-    return {point:raw,snap:null};
+    return {point:target,snap:null};
   }, [plan, fitScale, zoom, osnap, allLines, ortho]);
 
-  const completeCalibration = (line: Line) => { setPendingCalibration(line); setActiveStart(null); setActiveEnd(null); };
+  const completeCalibration = (line: Line) => { setPendingCalibration(line); setActiveStart(null); };
 
   const completeDimension = (line: Dimension) => {
     setMeasurements(items=>[...items,line]);setSelectedId(line.id);
     if(tool==="chain")setActiveStart(line.end); else setActiveStart(null);
-    setActiveEnd(null);
   };
 
   const distanceToSegment=(p:Point,a:Point,b:Point)=>{const l2=(b.x-a.x)**2+(b.y-a.y)**2;if(!l2)return dist(p,a);const t=Math.max(0,Math.min(1,((p.x-a.x)*(b.x-a.x)+(p.y-a.y)*(b.y-a.y))/l2));return dist(p,{x:a.x+t*(b.x-a.x),y:a.y+t*(b.y-a.y)});};
@@ -292,17 +301,15 @@ export default function Home() {
     const resolved=resolvePoint(rawPoint(event),activeStart,event.shiftKey); setSnap(resolved.snap);
     if(!activeStart){setActiveStart(resolved.point);setHoverPoint(resolved.point);}
     else if(tool==="calibrate"&&dist(activeStart,resolved.point)>2)completeCalibration({id:crypto.randomUUID(),start:activeStart,end:resolved.point});
-    else if(!activeEnd&&dist(activeStart,resolved.point)>2)setActiveEnd(resolved.point);
-    else if(activeEnd){const angle=Math.atan2(activeEnd.y-activeStart.y,activeEnd.x-activeStart.x),nx=-Math.sin(angle),ny=Math.cos(angle);const raw=rawPoint(event);completeDimension({id:crypto.randomUUID(),start:activeStart,end:activeEnd,offset:(raw.x-activeStart.x)*nx+(raw.y-activeStart.y)*ny});}
+    else if(dist(activeStart,resolved.point)>2)completeDimension({id:crypto.randomUUID(),start:activeStart,end:resolved.point,offset:fixedDimensionOffset(activeStart,resolved.point)});
   };
 
   const onCanvasPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if(!plan)return; const stage=stageRef.current?.getBoundingClientRect(); if(stage)setCursor({x:event.clientX-stage.left,y:event.clientY-stage.top,visible:true});
-    if(activeEnd){setHoverPoint(rawPoint(event));setSnap(null);return;}
     const resolved=resolvePoint(rawPoint(event),activeStart,event.shiftKey); setHoverPoint(resolved.point); setSnap(resolved.snap);
   };
 
-  const switchTool=useCallback((next:Tool)=>{ if(next!=="select"&&next!=="calibrate"&&!scaleMmPerPixel)return; setTool(next);setActiveStart(null);setActiveEnd(null);setSnap(null); },[scaleMmPerPixel]);
+  const switchTool=useCallback((next:Tool)=>{ if(next!=="select"&&next!=="calibrate"&&!scaleMmPerPixel)return; setTool(next);setActiveStart(null);setSnap(null); },[scaleMmPerPixel]);
 
   useEffect(()=>{
     const down=(event:KeyboardEvent)=>{
@@ -314,8 +321,9 @@ export default function Home() {
       if(event.key.toLowerCase()==="r")switchTool("calibrate");
       if(event.key.toLowerCase()==="d")switchTool("measure");
       if(event.key.toLowerCase()==="c")switchTool("chain");
-      if(event.key==="Escape"){setActiveStart(null);setActiveEnd(null);setPendingCalibration(null);setSnap(null);setSelectedId(null);}
-      if(event.key==="Enter"&&tool==="chain"){setActiveStart(null);setActiveEnd(null);}
+      if(event.key==="Tab"&&activeStart&&tool!=="calibrate"&&tool!=="select"){event.preventDefault();setDimensionSide(v=>v===-1?1:-1);}
+      if(event.key==="Escape"){setActiveStart(null);setPendingCalibration(null);setSnap(null);setSelectedId(null);}
+      if(event.key==="Enter"&&tool==="chain")setActiveStart(null);
       if((event.key==="Delete"||event.key==="Backspace")&&selectedId){event.preventDefault();setMeasurements(v=>v.filter(line=>line.id!==selectedId));setSelectedId(null);}
       if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="z"){event.preventDefault();setMeasurements(v=>v.slice(0,-1));}
       if(event.key==="0")resetView();
@@ -324,7 +332,7 @@ export default function Home() {
     };
     const up=(event:KeyboardEvent)=>{if(event.code==="Space")spaceRef.current=false;};
     window.addEventListener("keydown",down);window.addEventListener("keyup",up);return()=>{window.removeEventListener("keydown",down);window.removeEventListener("keyup",up);};
-  },[tool,selectedId,resetView,switchTool]);
+  },[tool,activeStart,selectedId,resetView,switchTool]);
 
   const confirmCalibration=()=>{if(!pendingCalibration)return;const actual=Number(knownLength)*UNIT_FACTOR[knownUnit];if(!actual||actual<=0)return setToast("请输入大于 0 的实际尺寸");setCalibration(pendingCalibration);setScaleMmPerPixel(actual/dist(pendingCalibration.start,pendingCalibration.end));setPendingCalibration(null);setTool("measure");setToast("比例已校准。D 单段标注，C 连续逐点标注");};
 
@@ -333,26 +341,28 @@ export default function Home() {
   const onStagePointerMove=(event:ReactPointerEvent<HTMLDivElement>)=>{if(panRef.current){setPan({x:panRef.current.panX+event.clientX-panRef.current.x,y:panRef.current.panY+event.clientY-panRef.current.y});}};
   const stopPan=()=>{panRef.current=null;setPanning(false);};
 
-  const exportImage=()=>{
+  const renderExportCanvas=()=>{
     if(!plan||!file)return;
     let minX=0,minY=0,maxX=plan.naturalWidth,maxY=plan.naturalHeight;
     measurements.forEach(line=>{const a=Math.atan2(line.end.y-line.start.y,line.end.x-line.start.x),nx=-Math.sin(a),ny=Math.cos(a);for(const p of [line.start,line.end,{x:line.start.x+nx*line.offset,y:line.start.y+ny*line.offset},{x:line.end.x+nx*line.offset,y:line.end.y+ny*line.offset}]){minX=Math.min(minX,p.x);minY=Math.min(minY,p.y);maxX=Math.max(maxX,p.x);maxY=Math.max(maxY,p.y);}});
     const margin=Math.max(24,Math.min(plan.naturalWidth,plan.naturalHeight)*.035);
     const outMinX=minX<0?minX-margin:0,outMinY=minY<0?minY-margin:0,outMaxX=maxX>plan.naturalWidth?maxX+margin:plan.naturalWidth,outMaxY=maxY>plan.naturalHeight?maxY+margin:plan.naturalHeight;
     const output=document.createElement("canvas");output.width=Math.ceil(outMaxX-outMinX);output.height=Math.ceil(outMaxY-outMinY);
-    const ctx=output.getContext("2d");if(!ctx)return;const mime=["image/png","image/jpeg","image/webp"].includes(file.type)?file.type:"image/png";
-    ctx.fillStyle="#f7f7f4";ctx.fillRect(0,0,output.width,output.height);const origin={x:-outMinX,y:-outMinY};ctx.drawImage(plan,origin.x,origin.y);
+    const ctx=output.getContext("2d");if(!ctx)return;
+    if(exportBackground==="white"){ctx.fillStyle="#fff";ctx.fillRect(0,0,output.width,output.height);}const origin={x:-outMinX,y:-outMinY};ctx.drawImage(plan,origin.x,origin.y);
     const width=Math.max(1.5,Math.min(plan.naturalWidth,plan.naturalHeight)/1000*1.8);
-    if(includeCalibration&&calibration)drawArchitecturalDimension(ctx,{...calibration,offset:0},"校准基准","#eb7b42",width,true,origin);
+    if(showCalibration&&calibration)drawArchitecturalDimension(ctx,{...calibration,offset:0},"校准基准","#eb7b42",width,true,origin);
     if(scaleMmPerPixel)measurements.forEach(line=>drawArchitecturalDimension(ctx,line,formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit),"#b82933",width,false,origin));
-    output.toBlob(blob=>{if(!blob)return;const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`${file.name.replace(/\.[^.]+$/,"")}-已标注.${mime==="image/jpeg"?"jpg":mime.split("/")[1]}`;a.click();URL.revokeObjectURL(url);},mime,.95);
+    return output;
   };
 
-  const draftCommand=tool==="select"?selectedId?"已选择标注：按 Delete 删除":"选择标注对象":activeEnd?"指定尺寸线位置（可向上或向下）":activeStart?(tool==="chain"?"连续标注：指定下一点":"指定第二条尺寸界线原点"):tool==="calibrate"?"校准比例：指定第一点":tool==="chain"?"连续标注：指定起点":"线性标注：指定第一条尺寸界线原点";
+  const exportImage=async(mode:"copy"|"save")=>{const output=renderExportCanvas();if(!output||!file)return;const blob=await new Promise<Blob|null>(resolve=>output.toBlob(resolve,"image/png"));if(!blob)return;if(mode==="copy"){try{await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]);setToast("已复制透明 PNG，可直接粘贴到 PPT、Figma 或微信");}catch{setToast("浏览器未允许复制图片，请使用保存 PNG");}return;}const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`${file.name.replace(/\.[^.]+$/,"")}-已标注.png`;a.click();URL.revokeObjectURL(url);setToast("PNG 已保存到本地");};
+
+  const draftCommand=tool==="select"?selectedId?"已选择标注：按 Delete 删除":"选择标注对象":activeStart?(tool==="chain"?"连续标注：指定下一点":"指定第二条尺寸界线原点"):tool==="calibrate"?"校准比例：指定第一点":tool==="chain"?"连续标注：指定起点":"线性标注：指定第一条尺寸界线原点";
   const snapScreen=useMemo(()=>{if(!snap||!plan)return null;const scale=fitScale*zoom;const boardW=plan.naturalWidth+boardPadding*2,boardH=plan.naturalHeight+boardPadding*2;return{x:stageSize.w/2+pan.x-boardW*scale/2+(snap.point.x+boardPadding)*scale,y:stageSize.h/2+pan.y-boardH*scale/2+(snap.point.y+boardPadding)*scale};},[snap,plan,boardPadding,fitScale,zoom,pan,stageSize]);
 
   return <main className="cad-app">
-    <header className="cad-topbar"><div className="cad-brand"><span>刻</span><div><strong>刻度</strong><small>ARCH PLAN DIMENSION</small></div></div><div className="command-line"><b>命令:</b><span>_{draftCommand}</span></div><div className="top-actions"><button onClick={()=>fileInputRef.current?.click()}>打开图纸</button><button className="export" disabled={!measurements.length} onClick={exportImage}>导出图纸</button></div></header>
+    <header className="cad-topbar"><div className="cad-brand"><span>刻</span><div><strong>刻度</strong><small>ARCH PLAN DIMENSION</small></div></div><div className="command-line"><b>命令:</b><span>_{draftCommand}</span></div><div className="top-actions"><button onClick={()=>fileInputRef.current?.click()}>打开图纸</button><button disabled={!measurements.length} onClick={()=>exportImage("copy")}>复制图片</button><button className="export" disabled={!measurements.length} onClick={()=>exportImage("save")}>保存 PNG</button></div></header>
     <section className="cad-workspace">
       <aside className="cad-tools">
         <button className={tool==="select"?"active":""} disabled={!plan} onClick={()=>switchTool("select")}><b>V</b><span>选择删除</span></button>
@@ -367,12 +377,12 @@ export default function Home() {
       <div className={`cad-stage ${panning?"panning":""}`} ref={stageRef} onWheel={onWheel} onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={stopPan} onPointerCancel={stopPan} onPointerLeave={()=>{if(!panning)setCursor(v=>({...v,visible:false}));}}>
         {!plan?<button className="cad-empty" onClick={()=>fileInputRef.current?.click()}><b>＋</b><strong>打开一张平面图</strong><span>导入后可先裁切有效图纸范围</span><small>PNG · JPG · WEBP</small></button>:
           <div className="cad-canvas-wrap" style={{width:(plan.naturalWidth+boardPadding*2)*fitScale,height:(plan.naturalHeight+boardPadding*2)*fitScale,transform:`translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}}><canvas ref={canvasRef} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerLeave={()=>setCursor(v=>({...v,visible:false}))} /></div>}
-        {cursor.visible&&plan&&!panning&&<div className="fine-crosshair" style={{left:cursor.x,top:cursor.y}}><i/><b/></div>}
+        {cursor.visible&&plan&&!panning&&<><div className="fine-crosshair"><i style={{left:cursor.x}}/><b style={{top:cursor.y}}/></div>{activeStart&&<div className="cursor-prompt" style={{left:cursor.x,top:cursor.y-28}}>{tool==="calibrate"?"第二点":tool==="chain"?"下一点":"第二点"}</div>}</>}
         {snap&&snapScreen&&<div className={`snap-marker snap-${snap.kind}`} style={{left:snapScreen.x,top:snapScreen.y}}><i/><span>{snap.kind}</span></div>}
         {pendingCalibration&&<div className="dynamic-input"><span>指定实际长度</span><label><input autoFocus value={knownLength} onChange={e=>setKnownLength(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")confirmCalibration();}}/><select value={knownUnit} onChange={e=>setKnownUnit(e.target.value as Unit)}><option>mm</option><option>cm</option><option>m</option></select></label><button onClick={confirmCalibration}>确认</button></div>}
       </div>
 
-      <aside className="cad-properties"><div className="prop-title"><span>特性</span><strong>{tool==="select"?"选择与图层":tool==="calibrate"?"比例校准":tool==="chain"?"连续标注":"线性标注"}</strong></div><section><h3>图纸</h3><dl><div><dt>文件</dt><dd>{file?.name||"—"}</dd></div><div><dt>像素</dt><dd>{plan?`${plan.naturalWidth} × ${plan.naturalHeight}`:"—"}</dd></div><div><dt>比例</dt><dd className={scaleMmPerPixel?"ok":""}>{scaleMmPerPixel?`1 px = ${scaleMmPerPixel.toFixed(3)} mm`:"未校准"}</dd></div></dl></section><section><h3>尺寸样式</h3><label className="prop-field"><span>数值单位</span><select value={displayUnit} onChange={e=>setDisplayUnit(e.target.value as Unit)}><option>mm</option><option>cm</option><option>m</option></select></label><label className="prop-check"><input type="checkbox" checked={showUnit} onChange={e=>setShowUnit(e.target.checked)}/>在图中显示单位</label><label className="prop-check"><input type="checkbox" checked={includeCalibration} onChange={e=>setIncludeCalibration(e.target.checked)}/>导出校准线</label></section>{measurements.length>0&&<section className="layer-panel"><h3>标注图层</h3>{measurements.slice().reverse().map((line,index)=><button key={line.id} className={selectedId===line.id?"selected":""} onClick={()=>{setSelectedId(line.id);switchTool("select");}}><i>{measurements.length-index}</i><span>{scaleMmPerPixel?formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit):"尺寸"}</span><b onClick={e=>{e.stopPropagation();setMeasurements(v=>v.filter(item=>item.id!==line.id));if(selectedId===line.id)setSelectedId(null);}}>×</b></button>)}</section>}<section><h3>对象捕捉</h3><p>端点 · 中点 · 交点 · 水平/垂直对齐</p><small>当前吸附已标注的几何点。图片墙线自动识别将在下一阶段加入。</small></section><section className="shortcut-card"><h3>快捷键</h3><dl><div><dt>V / Delete</dt><dd>选择 / 删除</dd></div><div><dt>R / D / C</dt><dd>校准 / 单段 / 连续</dd></div><div><dt>F8 / F3</dt><dd>正交 / 对象捕捉</dd></div><div><dt>滚轮</dt><dd>指针中心缩放</dd></div><div><dt>中键 / 空格</dt><dd>平移画布</dd></div><div><dt>Esc / Enter</dt><dd>取消 / 结束连续</dd></div></dl></section></aside>
+      <aside className="cad-properties"><div className="prop-title"><span>特性</span><strong>{tool==="select"?"选择与图层":tool==="calibrate"?"比例校准":tool==="chain"?"连续标注":"线性标注"}</strong></div><section><h3>图纸</h3><dl><div><dt>文件</dt><dd>{file?.name||"—"}</dd></div><div><dt>像素</dt><dd>{plan?`${plan.naturalWidth} × ${plan.naturalHeight}`:"—"}</dd></div><div><dt>比例</dt><dd className={scaleMmPerPixel?"ok":""}>{scaleMmPerPixel?`1 px = ${scaleMmPerPixel.toFixed(3)} mm`:"未校准"}</dd></div></dl></section><section><h3>尺寸样式</h3><label className="prop-field"><span>数值单位</span><select value={displayUnit} onChange={e=>setDisplayUnit(e.target.value as Unit)}><option>mm</option><option>cm</option><option>m</option></select></label><div className="prop-side"><span>固定偏移方向</span><div><button className={dimensionSide===-1?"active":""} onClick={()=>setDimensionSide(-1)}>上／左</button><button className={dimensionSide===1?"active":""} onClick={()=>setDimensionSide(1)}>下／右</button></div><small>绘制中按 Tab 快速切换</small></div><label className="prop-check"><input type="checkbox" checked={showUnit} onChange={e=>setShowUnit(e.target.checked)}/>在图中显示单位</label><label className="prop-check"><input type="checkbox" checked={showCalibration} onChange={e=>setShowCalibration(e.target.checked)}/>显示校准基准</label></section><section><h3>导出</h3><label className="prop-field"><span>画布背景</span><select value={exportBackground} onChange={e=>setExportBackground(e.target.value as "transparent"|"white")}><option value="transparent">透明 PNG</option><option value="white">白色底图</option></select></label><small>自动按图纸和最外侧标注裁切输出范围。</small></section>{measurements.length>0&&<section className="layer-panel"><h3>标注图层</h3>{measurements.slice().reverse().map((line,index)=><button key={line.id} className={selectedId===line.id?"selected":""} onClick={()=>{setSelectedId(line.id);switchTool("select");}}><i>{measurements.length-index}</i><span>{scaleMmPerPixel?formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit):"尺寸"}</span><b onClick={e=>{e.stopPropagation();setMeasurements(v=>v.filter(item=>item.id!==line.id));if(selectedId===line.id)setSelectedId(null);}}>×</b></button>)}</section>}<section><h3>对象捕捉</h3><p>端点 · 中点 · 交点 · 水平/垂直对齐</p><small>F8 正交优先，开启 F3 也不会把水平或垂直线拉歪。</small></section><section className="shortcut-card"><h3>快捷键</h3><dl><div><dt>V / Delete</dt><dd>选择 / 删除</dd></div><div><dt>R / D / C</dt><dd>校准 / 单段 / 连续</dd></div><div><dt>F8 / F3</dt><dd>正交 / 对象捕捉</dd></div><div><dt>Tab</dt><dd>切换偏移方向</dd></div><div><dt>滚轮</dt><dd>仅缩放图纸</dd></div><div><dt>中键 / 空格</dt><dd>平移画布</dd></div></dl></section></aside>
 
       <footer className="cad-status"><div><button className={ortho?"on":""} onClick={()=>setOrtho(v=>!v)}><b>F8</b> 正交</button><button className={osnap?"on":""} onClick={()=>setOsnap(v=>!v)}><b>F3</b> 对象捕捉</button><span>十字光标</span></div><div><span>{measurements.length} 条尺寸</span><span>{Math.round(fitScale*zoom*100)}%</span><button onClick={resetView}>适合窗口</button></div></footer>
     </section>
