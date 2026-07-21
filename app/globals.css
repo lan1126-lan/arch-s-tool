@@ -24,11 +24,12 @@
 .crop-zoom button{height:26px;border:1px solid #c4cbc7;background:#fff;color:#50605d;font-size:10px;cursor:pointer}
 .crop-zoom b{min-width:38px;font:600 9px Consolas;text-align:center}
 
-.cad-canvas-wrap{background:transparent;box-shadow:none}
+.cad-canvas-wrap{background:#fff;box-shadow:0 0 0 1px #657076,0 8px 28px rgba(0,0,0,.28)}
 .fine-crosshair{position:absolute;inset:0;width:100%;height:100%;transform:none;z-index:10;pointer-events:none}
-.fine-crosshair i,.fine-crosshair b{position:absolute;background:rgba(4,17,22,.78);box-shadow:0 0 0 .3px rgba(255,255,255,.75)}
-.fine-crosshair i{top:0!important;width:1px!important;height:100%!important}
-.fine-crosshair b{left:0!important;width:100%!important;height:1px!important}
+.fine-crosshair i,.fine-crosshair b{position:absolute;background:rgba(4,17,22,.48);box-shadow:none}
+.fine-crosshair i{top:0!important;width:.5px!important;height:100%!important}
+.fine-crosshair b{left:0!important;width:100%!important;height:.5px!important}
+.fine-crosshair em{position:absolute;width:5px;height:5px;transform:translate(-50%,-50%);border:.5px solid rgba(4,17,22,.8);border-radius:50%;background:#fff;box-shadow:none}
 .fine-crosshair:after{display:none}
 .cursor-prompt{position:absolute;z-index:12;transform:translate(-50%,-100%);padding:2px 5px;border:1px solid #4e6266;background:rgba(20,34,38,.9);color:#d2dddd;font:9px/1.3 "Microsoft YaHei";pointer-events:none;white-space:nowrap}
 .prop-side{margin-top:11px;font-size:10px}.prop-side>span{display:block;margin-bottom:6px;color:#69736f}.prop-side>div{display:grid;grid-template-columns:1fr 1fr;padding:2px;background:#e6e9e6}.prop-side button{height:25px;border:0;background:transparent;color:#727c78;font-size:9px;cursor:pointer}.prop-side button.active{background:#fff;color:#087e70;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.12)}.prop-side small{display:block;margin-top:5px;color:#939b98;font-size:8px}
