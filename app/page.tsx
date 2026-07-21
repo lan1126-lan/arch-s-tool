@@ -14,6 +14,10 @@ type CropRect = { x: number; y: number; w: number; h: number };
 const UNIT_FACTOR: Record<Unit, number> = { mm: 1, cm: 10, m: 1000 };
 const dist = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
 const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const clipboardImageFile=(blob:Blob) => {
+  const extension=blob.type==="image/jpeg"?"jpg":blob.type==="image/webp"?"webp":"png";
+  return new File([blob],`clipboard-${Date.now()}.${extension}`,{type:blob.type||"image/png"});
+};
 const perpendicularOffset=(start:Point,end:Point,pointer:Point) => {
   const angle=Math.atan2(end.y-start.y,end.x-start.x);
   const nx=-Math.sin(angle),ny=Math.cos(angle);
@@ -260,12 +264,32 @@ export default function Home() {
     setPlan(image); setFile(imageFile); setCandidate(null); setCalibration(null); setMeasurements([]); setScaleMmPerPixel(null); setActiveStart(null); setActiveEnd(null); setChainVector(null); setSelectedId(null); setTool("calibrate"); setZoom(1); setPan({x:0,y:0}); setToast("图纸已载入：R 校准比例，F8 正交，F3 对象吸附");
   }, []);
 
-  const loadFile = (nextFile: File) => {
+  const loadFile = useCallback((nextFile: File) => {
     if (!nextFile.type.startsWith("image/")) return setToast("请上传 PNG、JPG 或 WebP 图片");
     const url = URL.createObjectURL(nextFile); const image = new Image();
     image.onload = () => { setCandidate({image,file:nextFile}); URL.revokeObjectURL(url); };
     image.src = url;
-  };
+  }, []);
+
+  const pasteImageFromClipboard=useCallback(async()=>{
+    if(!navigator.clipboard?.read)return setToast("当前浏览器不支持按钮读取，请直接按 Ctrl+V / ⌘V 粘贴图片");
+    try{
+      const items=await navigator.clipboard.read();
+      for(const item of items){const type=item.types.find(value=>value.startsWith("image/"));if(type){loadFile(clipboardImageFile(await item.getType(type)));return;}}
+      setToast("剪贴板里没有图片，请先复制图片或截屏");
+    }catch{setToast("未获得剪贴板权限，请直接按 Ctrl+V / ⌘V 粘贴图片");}
+  },[loadFile]);
+
+  useEffect(()=>{
+    const handlePaste=(event:ClipboardEvent)=>{
+      const target=event.target as HTMLElement|null;
+      if(target?.matches("input,textarea,select")||target?.isContentEditable)return;
+      const image=Array.from(event.clipboardData?.items??[]).find(item=>item.type.startsWith("image/"))?.getAsFile();
+      if(!image)return;
+      event.preventDefault();loadFile(clipboardImageFile(image));
+    };
+    window.addEventListener("paste",handlePaste);return()=>window.removeEventListener("paste",handlePaste);
+  },[loadFile]);
 
   const applyCrop = (rect: CropRect) => {
     if (!candidate) return;
@@ -384,7 +408,7 @@ export default function Home() {
   const snapScreen=useMemo(()=>{if(!snap||!plan)return null;const scale=fitScale*zoom;const boardW=plan.naturalWidth+boardPadding*2,boardH=plan.naturalHeight+boardPadding*2;return{x:stageSize.w/2+pan.x-boardW*scale/2+(snap.point.x+boardPadding)*scale,y:stageSize.h/2+pan.y-boardH*scale/2+(snap.point.y+boardPadding)*scale};},[snap,plan,boardPadding,fitScale,zoom,pan,stageSize]);
 
   return <main className="cad-app">
-    <header className="cad-topbar"><div className="cad-brand"><span>刻</span><div><strong>刻度</strong><small>ARCH PLAN DIMENSION</small></div></div><div className="command-line"><b>命令:</b><span>_{draftCommand}</span></div><div className="top-actions"><button onClick={()=>fileInputRef.current?.click()}>打开图纸</button><button disabled={!measurements.length} onClick={()=>exportImage("copy")}>复制图片</button><button className="export" disabled={!measurements.length} onClick={()=>exportImage("save")}>保存 PNG</button></div></header>
+    <header className="cad-topbar"><div className="cad-brand"><span>刻</span><div><strong>刻度</strong><small>ARCH PLAN DIMENSION</small></div></div><div className="command-line"><b>命令:</b><span>_{draftCommand}</span></div><div className="top-actions"><button onClick={()=>fileInputRef.current?.click()}>本地上传</button><button onClick={pasteImageFromClipboard}>粘贴图片</button><button disabled={!measurements.length} onClick={()=>exportImage("copy")}>复制图片</button><button className="export" disabled={!measurements.length} onClick={()=>exportImage("save")}>保存 PNG</button></div></header>
     <section className="cad-workspace">
       <aside className="cad-tools">
         <button className={tool==="select"?"active":""} disabled={!plan} onClick={()=>switchTool("select")}><b>V</b><span>选择删除</span></button>
@@ -397,7 +421,7 @@ export default function Home() {
       </aside>
 
       <div className={`cad-stage ${panning?"panning":""}`} ref={stageRef} onWheel={onWheel} onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={stopPan} onPointerCancel={stopPan} onPointerLeave={()=>{if(!panning)setCursor(v=>({...v,visible:false}));}}>
-        {!plan?<button className="cad-empty" onClick={()=>fileInputRef.current?.click()}><b>＋</b><strong>打开一张平面图</strong><span>导入后可先裁切有效图纸范围</span><small>PNG · JPG · WEBP</small></button>:
+        {!plan?<div className="cad-empty"><b>＋</b><strong>导入一张平面图</strong><span>本地选择，或直接粘贴剪贴板图片</span><div className="empty-actions"><button onClick={()=>fileInputRef.current?.click()}>本地上传</button><button className="primary" onClick={pasteImageFromClipboard}>粘贴图片</button></div><small>Ctrl+V / ⌘V 直接粘贴 · PNG · JPG · WEBP</small></div>:
           <div className="cad-canvas-wrap" style={{width:(plan.naturalWidth+boardPadding*2)*fitScale,height:(plan.naturalHeight+boardPadding*2)*fitScale,transform:`translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}}><canvas ref={canvasRef} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerLeave={()=>setCursor(v=>({...v,visible:false}))} /></div>}
         {cursor.visible&&plan&&!panning&&<><div className="fine-crosshair"><i style={{left:cursor.x}}/><b style={{top:cursor.y}}/><em style={{left:cursor.x,top:cursor.y}}/></div>{activeStart&&<div className="cursor-prompt" style={{left:cursor.x,top:cursor.y-28}}>{activeEnd?"第三点·放置尺寸线":tool==="chain"&&chainVector?"单击生成":"第二点"}</div>}</>}
         {snap&&snapScreen&&<div className={`snap-marker snap-${snap.kind}`} style={{left:snapScreen.x,top:snapScreen.y}}><i/><span>{snap.kind}</span></div>}
