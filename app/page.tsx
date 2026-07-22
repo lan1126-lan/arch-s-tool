@@ -337,15 +337,18 @@ export default function Home() {
     let target=raw;
     let axis:"horizontal"|"vertical"|null=null;
     if(start&&useOrtho){const dx=Math.abs(raw.x-start.x),dy=Math.abs(raw.y-start.y);axis=dx>=dy?"horizontal":"vertical";target=axis==="horizontal"?{x:raw.x,y:start.y}:{x:start.x,y:raw.y};}
-    const keepOrtho=(p:Point)=>!start||!axis?p:axis==="horizontal"?{x:p.x,y:start.y}:{x:start.x,y:p.y};
     if (osnap) {
       const exact: {point:Point;kind:SnapKind;priority:number}[]=[];
       allLines.forEach(line=>{ exact.push({point:line.start,kind:"端点",priority:0},{point:line.end,kind:"端点",priority:0},{point:midpoint(line.start,line.end),kind:"中点",priority:2}); });
       for(let i=0;i<allLines.length;i++)for(let j=i+1;j<allLines.length;j++){const p=segmentIntersection(allLines[i],allLines[j]);if(p)exact.push({point:p,kind:"交点",priority:1});}
-      const near=exact.filter(c=>dist(c.point,target)<=threshold).sort((a,b)=>a.priority-b.priority||dist(a.point,target)-dist(b.point,target))[0];
-      if(near){const p=keepOrtho(near.point);return {point:p,snap:{point:p,kind:near.kind}};}
+      const near=exact.filter(c=>dist(c.point,raw)<=threshold).sort((a,b)=>a.priority-b.priority||dist(a.point,raw)-dist(b.point,raw))[0];
+      if(near)return {point:near.point,snap:{point:near.point,kind:near.kind}};
       const endpoints=allLines.flatMap(line=>[line.start,line.end]);
-      if(!axis){const nearX=endpoints.map(p=>({p,d:Math.abs(p.x-target.x)})).filter(v=>v.d<=threshold).sort((a,b)=>a.d-b.d)[0];const nearY=endpoints.map(p=>({p,d:Math.abs(p.y-target.y)})).filter(v=>v.d<=threshold).sort((a,b)=>a.d-b.d)[0];if(nearX||nearY){const p={x:nearX?nearX.p.x:target.x,y:nearY?nearY.p.y:target.y};return{point:p,snap:{point:p,kind:"对齐"}};}}
+      const nearX=endpoints.map(p=>({p,d:Math.abs(p.x-target.x)})).filter(v=>v.d<=threshold).sort((a,b)=>a.d-b.d)[0];
+      const nearY=endpoints.map(p=>({p,d:Math.abs(p.y-target.y)})).filter(v=>v.d<=threshold).sort((a,b)=>a.d-b.d)[0];
+      if(axis==="horizontal"&&nearX){const p={x:nearX.p.x,y:start!.y};return{point:p,snap:{point:p,kind:"对齐"}};}
+      if(axis==="vertical"&&nearY){const p={x:start!.x,y:nearY.p.y};return{point:p,snap:{point:p,kind:"对齐"}};}
+      if(!axis&&(nearX||nearY)){const p={x:nearX?nearX.p.x:target.x,y:nearY?nearY.p.y:target.y};return{point:p,snap:{point:p,kind:"对齐"}};}
     }
     return {point:target,snap:null};
   }, [plan, fitScale, zoom, osnap, allLines, ortho]);
@@ -520,7 +523,7 @@ export default function Home() {
           const conflict=auditPreview?.conflictIds.includes(line.id);
           return <button key={line.id} className={`${selectedId===line.id?"selected ":""}${conflict?"conflict ":""}${line.displaySource??"measured"}`} onClick={()=>{setSelectedId(line.id);switchTool("select");}}><i>{measurements.length-index}</i><span>{scaleMmPerPixel?formatLength(dimensionValueMm(line),displayUnit,showUnit):"尺寸"}<em>{conflict?"冲突":line.displaySource==="manual"?"手动":line.displaySource==="verified"?"核准":"测量"}</em></span><b onClick={e=>{e.stopPropagation();setMeasurements(v=>v.filter(item=>item.id!==line.id));setAuditPreview(null);setAuditUndo(null);if(selectedId===line.id)setSelectedId(null);}}>×</b></button>;
         })}</section>}
-        <section><h3>对象捕捉</h3><p>原点、偏移端点 · 中点 · 交点 · 水平/垂直对齐</p><small>尺寸线偏移后的两个端点也可直接吸附；F8 正交仍然优先。</small></section>
+        <section><h3>对象捕捉</h3><p>原点、偏移端点 · 中点 · 交点 · 水平/垂直对齐</p><small>F8 与 F3 可同时使用：横线吸附已有点的 X，竖线吸附已有点的 Y；靠近端点时精确吸附。</small></section>
         <section className="shortcut-card"><h3>快捷键</h3><dl><div><dt>V / Delete</dt><dd>选择 / 删除</dd></div><div><dt>双击数字</dt><dd>选择模式下修改</dd></div><div><dt>R / D / C</dt><dd>校准 / 单段 / 逐点</dd></div><div><dt>F8 / F3</dt><dd>正交 / 对象捕捉</dd></div><div><dt>滚轮</dt><dd>仅缩放图纸</dd></div><div><dt>中键 / 空格</dt><dd>平移画布</dd></div></dl></section>
       </aside>
 
