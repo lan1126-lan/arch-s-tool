@@ -6,7 +6,7 @@
 
 把原本反复经历的“截图 → 导入 CAD → 猜墙厚 → 缩放 → 标尺寸 → 截图”缩短成几分钟。
 
-[**立即在线使用**](https://kedu-plan-annotator.elated-rook-3897.chatgpt.site) · [提交建议](https://github.com/lan1126-lan/arch-s-tool/issues)
+[**立即在线使用**](https://lan1126-lan.github.io/arch-s-tool/) · [提交建议](https://github.com/lan1126-lan/arch-s-tool/issues)
 
 </div>
 
@@ -90,7 +90,7 @@
 
 无需注册，打开即可使用：
 
-### [kedu-plan-annotator.elated-rook-3897.chatgpt.site](https://kedu-plan-annotator.elated-rook-3897.chatgpt.site)
+### [lan1126-lan.github.io/arch-s-tool](https://lan1126-lan.github.io/arch-s-tool/)
 
 ## 本地运行
 

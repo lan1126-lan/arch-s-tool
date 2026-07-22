@@ -1,9 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
-const siteUrl = process.env.GITHUB_PAGES === "true"
-  ? "https://lan1126-lan.github.io/arch-s-tool"
-  : "https://kedu-plan-annotator.elated-rook-3897.chatgpt.site";
+const siteUrl = "https://lan1126-lan.github.io/arch-s-tool";
 const title = "刻度｜平面图标注工作台";
 const description = "上传平面图，以已知尺寸校准比例，快速完成建筑尺寸标注并按原图导出。";
 
