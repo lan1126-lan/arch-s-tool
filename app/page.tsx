@@ -2,10 +2,11 @@
 
 import { ChangeEvent, PointerEvent as ReactPointerEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { initAnalytics, trackEvent } from "./analytics";
+import { AuditPreview, DisplaySource, auditDimensions, displayedMillimeters, measuredMillimeters } from "./dimension-audit";
 
 type Point = { x: number; y: number };
 type Line = { id: string; start: Point; end: Point };
-type Dimension = Line & { offset: number };
+type Dimension = Line & { offset: number; displayMm?: number; displaySource?: DisplaySource };
 type Tool = "select" | "calibrate" | "measure" | "chain";
 type Unit = "mm" | "cm" | "m";
 type SnapKind = "端点" | "中点" | "交点" | "对齐";
@@ -44,6 +45,11 @@ function formatLength(mm: number, unit: Unit, showUnit = true) {
   const value = mm / UNIT_FACTOR[unit];
   const number = unit === "mm" ? Math.round(value).toLocaleString("zh-CN") : value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
   return showUnit ? `${number} ${unit}` : number;
+}
+
+function inputLength(mm: number, unit: Unit) {
+  const value = mm / UNIT_FACTOR[unit];
+  return unit === "mm" ? String(Math.round(value * 10) / 10) : String(Math.round(value * 1000) / 1000);
 }
 
 function segmentIntersection(a: Line, b: Line): Point | null {
@@ -222,9 +228,17 @@ export default function Home() {
   const [cursor, setCursor] = useState<{x:number;y:number;visible:boolean}>({x:0,y:0,visible:false});
   const [showCalibration, setShowCalibration] = useState(false);
   const [toast, setToast] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
+  const [roundingStepMm, setRoundingStepMm] = useState(10);
+  const [preserveManual, setPreserveManual] = useState(true);
+  const [auditPreview, setAuditPreview] = useState<AuditPreview | null>(null);
+  const [auditUndo, setAuditUndo] = useState<Dimension[] | null>(null);
   const boardPadding = plan ? Math.round(Math.max(plan.naturalWidth,plan.naturalHeight)*.22) : 0;
 
   useEffect(() => { initAnalytics(); }, []);
+
+  const selectedLine = useMemo(() => measurements.find(line => line.id === selectedId) ?? null, [measurements, selectedId]);
+  const dimensionValueMm = useCallback((line: Dimension) => scaleMmPerPixel ? displayedMillimeters(line, scaleMmPerPixel) : 0, [scaleMmPerPixel]);
 
   const allLines = useMemo(() => [
     ...(calibration ? [calibration] : []),
@@ -254,7 +268,7 @@ export default function Home() {
     const width = Math.max(1.5, Math.min(plan.naturalWidth, plan.naturalHeight) / 1000 * 1.8);
     const origin={x:boardPadding,y:boardPadding};
     if (calibration&&showCalibration) drawArchitecturalDimension(ctx, {...calibration,offset:0}, "校准基准", "#eb7b42", width, true,origin,dimensionFontSize);
-    if (scaleMmPerPixel) measurements.forEach(line => drawArchitecturalDimension(ctx, line, formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit), line.id===selectedId?"#00a994":"#b82933", width, false,origin,dimensionFontSize));
+    if (scaleMmPerPixel) measurements.forEach(line => drawArchitecturalDimension(ctx, line, formatLength(dimensionValueMm(line),displayUnit,showUnit), line.id===selectedId?"#00a994":"#b82933", width, false,origin,dimensionFontSize));
     if (activeStart && hoverPoint) {
       const previewEnd=activeEnd??hoverPoint;
       const offset=tool==="calibrate"?0:activeEnd?perpendicularOffset(activeStart,activeEnd,hoverPoint):tool==="chain"&&chainVector?reusedOffset(activeStart,hoverPoint,chainVector):0;
@@ -262,12 +276,12 @@ export default function Home() {
       const label = tool === "calibrate" || (!activeEnd&&!chainVector) ? "" : scaleMmPerPixel ? formatLength(dist(activeStart,previewEnd)*scaleMmPerPixel,displayUnit,showUnit) : "";
       drawArchitecturalDimension(ctx,draft,label,"#0b8d7b",width,true,origin,dimensionFontSize);
     }
-  }, [plan,boardPadding,calibration,showCalibration,measurements,scaleMmPerPixel,displayUnit,showUnit,dimensionFontSize,selectedId,activeStart,activeEnd,chainVector,hoverPoint,tool]);
+  }, [plan,boardPadding,calibration,showCalibration,measurements,scaleMmPerPixel,displayUnit,showUnit,dimensionFontSize,selectedId,activeStart,activeEnd,chainVector,hoverPoint,tool,dimensionValueMm]);
   useEffect(() => renderCanvas(), [renderCanvas]);
 
   const commitPlan = useCallback((image: HTMLImageElement, imageFile: File) => {
     const defaultFontSize=Math.round(Math.max(17,Math.min(400,Math.min(image.naturalWidth,image.naturalHeight)/1000*1.8*8.5)));
-    setPlan(image); setFile(imageFile); setCandidate(null); setCalibration(null); setMeasurements([]); setScaleMmPerPixel(null); setActiveStart(null); setActiveEnd(null); setChainVector(null); setSelectedId(null); setDimensionFontSize(defaultFontSize); setTool("calibrate"); setZoom(1); setPan({x:0,y:0}); setToast("图纸已载入：R 校准比例，F8 正交，F3 对象吸附");
+    setPlan(image); setFile(imageFile); setCandidate(null); setCalibration(null); setMeasurements([]); setScaleMmPerPixel(null); setActiveStart(null); setActiveEnd(null); setChainVector(null); setSelectedId(null); setAuditPreview(null); setAuditUndo(null); setDimensionFontSize(defaultFontSize); setTool("calibrate"); setZoom(1); setPan({x:0,y:0}); setToast("图纸已载入：R 校准比例，F8 正交，F3 对象吸附");
     trackEvent("image_ready");
   }, []);
 
@@ -311,7 +325,7 @@ export default function Home() {
     output.toBlob(blob=>{ if(!blob)return; const nextFile=new File([blob],candidate.file.name,{type:mime}); const url=URL.createObjectURL(blob); const image=new Image(); image.onload=()=>{commitPlan(image,nextFile);URL.revokeObjectURL(url);}; image.src=url; },mime,.95);
   };
 
-  const rawPoint = (event: ReactPointerEvent<HTMLCanvasElement>): Point => {
+  const rawPoint = (event: { clientX: number; clientY: number; currentTarget: HTMLCanvasElement }): Point => {
     const r=event.currentTarget.getBoundingClientRect();
     return {x:(event.clientX-r.left)*event.currentTarget.width/r.width-boardPadding,y:(event.clientY-r.top)*event.currentTarget.height/r.height-boardPadding};
   };
@@ -339,15 +353,66 @@ export default function Home() {
   const completeCalibration = (line: Line) => { setPendingCalibration(line); setActiveStart(null); setActiveEnd(null); };
 
   const completeDimension = (line: Dimension) => {
-    setMeasurements(items=>[...items,line]);setSelectedId(line.id);
+    setMeasurements(items=>[...items,line]);setSelectedId(line.id);setAuditPreview(null);setAuditUndo(null);
     trackEvent("dimension_created", tool, measurements.length + 1);
     setActiveEnd(null);
     if(tool==="chain")setActiveStart(line.end); else setActiveStart(null);
   };
 
+  const saveDisplayValue = () => {
+    if (!selectedLine || !scaleMmPerPixel) return;
+    const numeric = Number((editInputRef.current?.value ?? "").replace(/,/g, "").trim());
+    const mm = numeric * UNIT_FACTOR[displayUnit];
+    if (!Number.isFinite(mm) || mm <= 0) return setToast("请输入大于 0 的尺寸数字");
+    setMeasurements(items => items.map(line => line.id === selectedLine.id
+      ? { ...line, displayMm: mm, displaySource: "manual" as const }
+      : line));
+    setAuditPreview(null);setAuditUndo(null);setToast("已修改显示数字，尺寸线与校准比例保持不变");
+    trackEvent("dimension_edit", "manual");
+  };
+
+  const resetDisplayValue = () => {
+    if (!selectedLine || !scaleMmPerPixel) return;
+    setMeasurements(items => items.map(line => {
+      if (line.id !== selectedLine.id) return line;
+      const measuredLine = { ...line };
+      delete measuredLine.displayMm;
+      delete measuredLine.displaySource;
+      return measuredLine;
+    }));
+    if(editInputRef.current)editInputRef.current.value=inputLength(measuredMillimeters(selectedLine, scaleMmPerPixel), displayUnit);
+    setAuditPreview(null);setAuditUndo(null);setToast("已恢复为校准测量值");
+    trackEvent("dimension_edit", "reset");
+  };
+
+  const previewAudit = () => {
+    if (!scaleMmPerPixel || !measurements.length) return;
+    const preview = auditDimensions(measurements, scaleMmPerPixel, roundingStepMm, preserveManual);
+    setAuditPreview(preview);
+    trackEvent(preview.conflictIds.length ? "audit_conflict" : "audit_preview", String(roundingStepMm), preview.changes.length);
+  };
+
+  const applyAudit = () => {
+    if (!auditPreview || auditPreview.conflictIds.length) return;
+    setAuditUndo(measurements.map(line => ({ ...line, start: { ...line.start }, end: { ...line.end } })));
+    setMeasurements(items => items.map(line => ({
+      ...line,
+      displayMm: auditPreview.values[line.id],
+      displaySource: preserveManual && line.displaySource === "manual" ? "manual" : "verified",
+    })));
+    setAuditPreview(null);setToast(`智能核准完成：调整 ${auditPreview.changes.length} 条尺寸`);
+    trackEvent("audit_apply", String(roundingStepMm), auditPreview.changes.length);
+  };
+
+  const undoAudit = () => {
+    if (!auditUndo) return;
+    setMeasurements(auditUndo);setAuditUndo(null);setAuditPreview(null);setToast("已撤销上一次智能核准");
+    trackEvent("audit_undo");
+  };
+
   const distanceToSegment=(p:Point,a:Point,b:Point)=>{const l2=(b.x-a.x)**2+(b.y-a.y)**2;if(!l2)return dist(p,a);const t=Math.max(0,Math.min(1,((p.x-a.x)*(b.x-a.x)+(p.y-a.y)*(b.y-a.y))/l2));return dist(p,{x:a.x+t*(b.x-a.x),y:a.y+t*(b.y-a.y)});};
 
-  const selectAt=(p:Point)=>{const threshold=12/(fitScale*zoom);const hit=measurements.map(line=>{const angle=Math.atan2(line.end.y-line.start.y,line.end.x-line.start.x),nx=-Math.sin(angle),ny=Math.cos(angle);return{line,d:distanceToSegment(p,{x:line.start.x+nx*line.offset,y:line.start.y+ny*line.offset},{x:line.end.x+nx*line.offset,y:line.end.y+ny*line.offset})};}).filter(x=>x.d<=threshold).sort((a,b)=>a.d-b.d)[0];setSelectedId(hit?.line.id??null);};
+  const selectAt=(p:Point)=>{const threshold=12/(fitScale*zoom);const hit=measurements.map(line=>{const angle=Math.atan2(line.end.y-line.start.y,line.end.x-line.start.x),nx=-Math.sin(angle),ny=Math.cos(angle);return{line,d:distanceToSegment(p,{x:line.start.x+nx*line.offset,y:line.start.y+ny*line.offset},{x:line.end.x+nx*line.offset,y:line.end.y+ny*line.offset})};}).filter(x=>x.d<=threshold).sort((a,b)=>a.d-b.d)[0];const id=hit?.line.id??null;setSelectedId(id);return id;};
 
   const onCanvasPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if(event.button===1||spaceRef.current)return;
@@ -384,8 +449,8 @@ export default function Home() {
       if(event.key.toLowerCase()==="c")switchTool("chain");
       if(event.key==="Escape"){setActiveStart(null);setActiveEnd(null);setChainVector(null);setPendingCalibration(null);setSnap(null);setSelectedId(null);}
       if(event.key==="Enter"&&tool==="chain"){setActiveStart(null);setActiveEnd(null);setChainVector(null);}
-      if((event.key==="Delete"||event.key==="Backspace")&&selectedId){event.preventDefault();setMeasurements(v=>v.filter(line=>line.id!==selectedId));setSelectedId(null);}
-      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="z"){event.preventDefault();setMeasurements(v=>v.slice(0,-1));}
+      if((event.key==="Delete"||event.key==="Backspace")&&selectedId){event.preventDefault();setMeasurements(v=>v.filter(line=>line.id!==selectedId));setSelectedId(null);setAuditPreview(null);setAuditUndo(null);}
+      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="z"){event.preventDefault();setMeasurements(v=>v.slice(0,-1));setAuditPreview(null);setAuditUndo(null);}
       if(event.key==="0")resetView();
       if(event.key==="+")setZoom(v=>Math.min(8,v*1.2));
       if(event.key==="-")setZoom(v=>Math.max(.2,v/1.2));
@@ -408,7 +473,7 @@ export default function Home() {
     ctx.fillStyle="#fff";ctx.fillRect(0,0,output.width,output.height);const origin={x:boardPadding,y:boardPadding};ctx.drawImage(plan,origin.x,origin.y);
     const width=Math.max(1.5,Math.min(plan.naturalWidth,plan.naturalHeight)/1000*1.8);
     if(showCalibration&&calibration)drawArchitecturalDimension(ctx,{...calibration,offset:0},"校准基准","#eb7b42",width,true,origin,dimensionFontSize);
-    if(scaleMmPerPixel)measurements.forEach(line=>drawArchitecturalDimension(ctx,line,formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit),"#b82933",width,false,origin,dimensionFontSize));
+    if(scaleMmPerPixel)measurements.forEach(line=>drawArchitecturalDimension(ctx,line,formatLength(dimensionValueMm(line),displayUnit,showUnit),"#b82933",width,false,origin,dimensionFontSize));
     return output;
   };
 
@@ -426,24 +491,55 @@ export default function Home() {
         <button className={tool==="measure"?"active":""} disabled={!scaleMmPerPixel} onClick={()=>switchTool("measure")}><b>D</b><span>线性标注</span></button>
         <button className={tool==="chain"?"active":""} disabled={!scaleMmPerPixel} onClick={()=>switchTool("chain")}><b>C</b><span>连续标注</span></button>
         <i />
-        <button disabled={!measurements.length} onClick={()=>setMeasurements(v=>v.slice(0,-1))}><b>↶</b><span>撤销</span></button>
+        <button disabled={!measurements.length} onClick={()=>{setMeasurements(v=>v.slice(0,-1));setAuditPreview(null);setAuditUndo(null);}}><b>↶</b><span>撤销</span></button>
         <button disabled={!plan} onClick={resetView}><b>0</b><span>全图</span></button>
       </aside>
 
       <div className={`cad-stage ${panning?"panning":""}`} ref={stageRef} onWheel={onWheel} onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={stopPan} onPointerCancel={stopPan} onPointerLeave={()=>{if(!panning)setCursor(v=>({...v,visible:false}));}}>
         {!plan?<div className="cad-empty"><b>＋</b><strong>导入一张平面图</strong><span>本地选择，或直接粘贴剪贴板图片</span><div className="empty-actions"><button onClick={()=>fileInputRef.current?.click()}>本地上传</button><button className="primary" onClick={pasteImageFromClipboard}>粘贴图片</button></div><small>Ctrl+V / ⌘V 直接粘贴 · PNG · JPG · WEBP</small></div>:
-          <div className="cad-canvas-wrap" style={{width:(plan.naturalWidth+boardPadding*2)*fitScale,height:(plan.naturalHeight+boardPadding*2)*fitScale,transform:`translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}}><canvas ref={canvasRef} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerLeave={()=>setCursor(v=>({...v,visible:false}))} /></div>}
+          <div className="cad-canvas-wrap" style={{width:(plan.naturalWidth+boardPadding*2)*fitScale,height:(plan.naturalHeight+boardPadding*2)*fitScale,transform:`translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}}><canvas ref={canvasRef} title="选择工具下双击尺寸数字可修改" onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onDoubleClick={event=>{if(tool!=="select")return;const id=selectAt(rawPoint(event));if(!id)return;setTimeout(()=>{editInputRef.current?.focus();editInputRef.current?.select();},0);}} onPointerLeave={()=>setCursor(v=>({...v,visible:false}))} /></div>}
         {cursor.visible&&plan&&!panning&&<><div className="fine-crosshair"><i style={{left:cursor.x}}/><b style={{top:cursor.y}}/><em style={{left:cursor.x,top:cursor.y}}/></div>{activeStart&&<div className="cursor-prompt" style={{left:cursor.x,top:cursor.y-28}}>{activeEnd?"第三点·放置尺寸线":tool==="chain"&&chainVector?"单击生成":"第二点"}</div>}</>}
         {snap&&snapScreen&&<div className={`snap-marker snap-${snap.kind}`} style={{left:snapScreen.x,top:snapScreen.y}}><i/><span>{snap.kind}</span></div>}
         {pendingCalibration&&<div className="dynamic-input"><span>指定实际长度</span><label><input autoFocus value={knownLength} onChange={e=>setKnownLength(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")confirmCalibration();}}/><select value={knownUnit} onChange={e=>setKnownUnit(e.target.value as Unit)}><option>mm</option><option>cm</option><option>m</option></select></label><button onClick={confirmCalibration}>确认</button></div>}
       </div>
 
-      <aside className="cad-properties"><div className="prop-title"><span>特性</span><strong>{tool==="select"?"选择与图层":tool==="calibrate"?"比例校准":tool==="chain"?"连续标注":"线性标注"}</strong></div><section><h3>图纸</h3><dl><div><dt>文件</dt><dd>{file?.name||"—"}</dd></div><div><dt>像素</dt><dd>{plan?`${plan.naturalWidth} × ${plan.naturalHeight}`:"—"}</dd></div><div><dt>比例</dt><dd className={scaleMmPerPixel?"ok":""}>{scaleMmPerPixel?`1 px = ${scaleMmPerPixel.toFixed(3)} mm`:"未校准"}</dd></div></dl></section><section><h3>尺寸样式</h3><label className="prop-field"><span>数值单位</span><select value={displayUnit} onChange={e=>setDisplayUnit(e.target.value as Unit)}><option>mm</option><option>cm</option><option>m</option></select></label><label className="prop-range"><span>文字大小 <b>{dimensionFontSize} px</b></span><input aria-label="标注文字大小" type="range" min="12" max="400" step="1" value={dimensionFontSize} onChange={e=>setDimensionFontSize(Number(e.target.value))}/><small>12</small><small>400</small></label><label className="prop-check"><input type="checkbox" checked={showUnit} onChange={e=>setShowUnit(e.target.checked)}/>在图中显示单位</label><label className="prop-check"><input type="checkbox" checked={showCalibration} onChange={e=>setShowCalibration(e.target.checked)}/>显示校准基准</label><small>单段标注的第三点可自由定位。逐点标注的第一段确定距离和方向，之后每点一次自动生成下一段。</small></section><section><h3>导出</h3><small>复制与保存均输出屏幕上的完整白色图布，图纸和全部标注保持同一范围。</small></section>{measurements.length>0&&<section className="layer-panel"><h3>标注图层</h3>{measurements.slice().reverse().map((line,index)=><button key={line.id} className={selectedId===line.id?"selected":""} onClick={()=>{setSelectedId(line.id);switchTool("select");}}><i>{measurements.length-index}</i><span>{scaleMmPerPixel?formatLength(dist(line.start,line.end)*scaleMmPerPixel,displayUnit,showUnit):"尺寸"}</span><b onClick={e=>{e.stopPropagation();setMeasurements(v=>v.filter(item=>item.id!==line.id));if(selectedId===line.id)setSelectedId(null);}}>×</b></button>)}</section>}<section><h3>对象捕捉</h3><p>原点、偏移端点 · 中点 · 交点 · 水平/垂直对齐</p><small>尺寸线偏移后的两个端点也可直接吸附；F8 正交仍然优先。</small></section><section className="shortcut-card"><h3>快捷键</h3><dl><div><dt>V / Delete</dt><dd>选择 / 删除</dd></div><div><dt>R / D / C</dt><dd>校准 / 单段 / 逐点</dd></div><div><dt>F8 / F3</dt><dd>正交 / 对象捕捉</dd></div><div><dt>滚轮</dt><dd>仅缩放图纸</dd></div><div><dt>中键 / 空格</dt><dd>平移画布</dd></div></dl></section></aside>
+      <aside className="cad-properties">
+        <div className="prop-title"><span>特性</span><strong>{tool==="select"?"选择与图层":tool==="calibrate"?"比例校准":tool==="chain"?"连续标注":"线性标注"}</strong></div>
+        <section><h3>图纸</h3><dl><div><dt>文件</dt><dd>{file?.name||"—"}</dd></div><div><dt>像素</dt><dd>{plan?`${plan.naturalWidth} × ${plan.naturalHeight}`:"—"}</dd></div><div><dt>比例</dt><dd className={scaleMmPerPixel?"ok":""}>{scaleMmPerPixel?`1 px = ${scaleMmPerPixel.toFixed(3)} mm`:"未校准"}</dd></div></dl></section>
+        {selectedLine&&scaleMmPerPixel&&<section className="dimension-editor">
+          <h3>选中尺寸</h3>
+          <div className="dimension-readout"><span>校准测量值</span><b>{formatLength(measuredMillimeters(selectedLine,scaleMmPerPixel),displayUnit,true)}</b></div>
+          <label><span>图上显示数字</span><div><input key={`${selectedLine.id}-${displayUnit}-${selectedLine.displayMm??"measured"}`} ref={editInputRef} aria-label="修改尺寸数字" defaultValue={inputLength(dimensionValueMm(selectedLine),displayUnit)} onKeyDown={e=>{if(e.key==="Enter")saveDisplayValue();if(e.key==="Escape")e.currentTarget.value=inputLength(dimensionValueMm(selectedLine),displayUnit);}}/><em>{displayUnit}</em></div></label>
+          <div className="dimension-actions"><button onClick={saveDisplayValue}>应用数字</button><button onClick={resetDisplayValue} disabled={!selectedLine.displaySource}>恢复测量值</button></div>
+          <small className={`dimension-state ${selectedLine.displaySource??"measured"}`}>{selectedLine.displaySource==="manual"?"手动值 · 不随比例联动":selectedLine.displaySource==="verified"?"已智能核准 · 仍可手动修改":"测量值 · 由当前比例生成"}</small>
+        </section>}
+        <section><h3>尺寸样式</h3><label className="prop-field"><span>数值单位</span><select value={displayUnit} onChange={e=>setDisplayUnit(e.target.value as Unit)}><option>mm</option><option>cm</option><option>m</option></select></label><label className="prop-range"><span>文字大小 <b>{dimensionFontSize} px</b></span><input aria-label="标注文字大小" type="range" min="12" max="400" step="1" value={dimensionFontSize} onChange={e=>setDimensionFontSize(Number(e.target.value))}/><small>12</small><small>400</small></label><label className="prop-check"><input type="checkbox" checked={showUnit} onChange={e=>setShowUnit(e.target.checked)}/>在图中显示单位</label><label className="prop-check"><input type="checkbox" checked={showCalibration} onChange={e=>setShowCalibration(e.target.checked)}/>显示校准基准</label><small>单段标注的第三点可自由定位。逐点标注的第一段确定距离和方向，之后每点一次自动生成下一段。</small></section>
+        {measurements.length>0&&scaleMmPerPixel&&<section className="audit-panel"><h3>智能核准</h3><label className="prop-field"><span>取整精度</span><select value={roundingStepMm} onChange={e=>{setRoundingStepMm(Number(e.target.value));setAuditPreview(null);}}><option value="1">1 mm</option><option value="5">5 mm</option><option value="10">10 mm</option><option value="50">50 mm</option></select></label><label className="prop-check"><input type="checkbox" checked={preserveManual} onChange={e=>{setPreserveManual(e.target.checked);setAuditPreview(null);}}/>保护手动修改</label><button className="audit-primary" onClick={previewAudit}>一键智能核准</button>{auditUndo&&<button className="audit-undo" onClick={undoAudit}>撤销上次核准</button>}<small>先预览再应用。自动检查取整、同端点一致，以及分段与总尺寸关系。</small></section>}
+        <section><h3>导出</h3><small>复制与保存均输出屏幕上的完整白色图布，图纸和全部标注保持同一范围。</small></section>
+        {measurements.length>0&&<section className="layer-panel"><h3>标注图层</h3>{measurements.slice().reverse().map((line,index)=>{
+          const conflict=auditPreview?.conflictIds.includes(line.id);
+          return <button key={line.id} className={`${selectedId===line.id?"selected ":""}${conflict?"conflict ":""}${line.displaySource??"measured"}`} onClick={()=>{setSelectedId(line.id);switchTool("select");}}><i>{measurements.length-index}</i><span>{scaleMmPerPixel?formatLength(dimensionValueMm(line),displayUnit,showUnit):"尺寸"}<em>{conflict?"冲突":line.displaySource==="manual"?"手动":line.displaySource==="verified"?"核准":"测量"}</em></span><b onClick={e=>{e.stopPropagation();setMeasurements(v=>v.filter(item=>item.id!==line.id));setAuditPreview(null);setAuditUndo(null);if(selectedId===line.id)setSelectedId(null);}}>×</b></button>;
+        })}</section>}
+        <section><h3>对象捕捉</h3><p>原点、偏移端点 · 中点 · 交点 · 水平/垂直对齐</p><small>尺寸线偏移后的两个端点也可直接吸附；F8 正交仍然优先。</small></section>
+        <section className="shortcut-card"><h3>快捷键</h3><dl><div><dt>V / Delete</dt><dd>选择 / 删除</dd></div><div><dt>双击数字</dt><dd>选择模式下修改</dd></div><div><dt>R / D / C</dt><dd>校准 / 单段 / 逐点</dd></div><div><dt>F8 / F3</dt><dd>正交 / 对象捕捉</dd></div><div><dt>滚轮</dt><dd>仅缩放图纸</dd></div><div><dt>中键 / 空格</dt><dd>平移画布</dd></div></dl></section>
+      </aside>
 
       <footer className="cad-status"><div><button className={ortho?"on":""} onClick={()=>setOrtho(v=>!v)}><b>F8</b> 正交</button><button className={osnap?"on":""} onClick={()=>setOsnap(v=>!v)}><b>F3</b> 对象捕捉</button><span>十字光标</span></div><div><span>{measurements.length} 条尺寸</span><span>{Math.round(fitScale*zoom*100)}%</span><button onClick={resetView}>适合窗口</button></div></footer>
     </section>
     <input ref={fileInputRef} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(e:ChangeEvent<HTMLInputElement>)=>{const f=e.target.files?.[0];if(f)loadFile(f,"upload");e.target.value="";}}/>
     {candidate&&<CropDialog candidate={candidate} onCancel={()=>{trackEvent("crop_decision","cancelled");setCandidate(null);}} onUseOriginal={()=>{trackEvent("crop_decision","original");commitPlan(candidate.image,candidate.file);}} onCrop={applyCrop}/>}
+    {auditPreview&&<div className="audit-overlay" role="dialog" aria-modal="true" aria-label="智能核准预览">
+      <div className="audit-dialog">
+        <div className="audit-head"><div><span>SMART DIMENSION CHECK</span><strong>智能核准预览</strong><p>只调整显示数字，所有尺寸线、端点和校准比例保持不变。</p></div><button aria-label="关闭核准预览" onClick={()=>setAuditPreview(null)}>×</button></div>
+        <div className="audit-summary"><div><b>{auditPreview.changes.length}</b><span>条数字将调整</span></div><div><b>{auditPreview.duplicateGroups}</b><span>组同端点尺寸</span></div><div><b>{auditPreview.chainRelations}</b><span>条分段/总尺寸关系</span></div><div className={auditPreview.conflictIds.length?"danger":""}><b>{auditPreview.conflictIds.length}</b><span>条手动值冲突</span></div></div>
+        <div className="audit-content">
+          {auditPreview.conflictMessages.map(message=><div className="audit-warning" key={message}>{message}</div>)}
+          {auditPreview.protectedManual>0&&<div className="audit-note">已保护 {auditPreview.protectedManual} 条手动修改，不会被自动覆盖。</div>}
+          <div className="audit-list"><div className="audit-list-head"><span>尺寸</span><span>核准前</span><span>核准后</span><span>处理方式</span></div>{auditPreview.changes.length?auditPreview.changes.map((change,index)=><button key={change.id} className={auditPreview.conflictIds.includes(change.id)?"conflict":""} onClick={()=>{setSelectedId(change.id);switchTool("select");setAuditPreview(null);}}><i>{index+1}</i><span>{formatLength(change.beforeMm,displayUnit,showUnit)}</span><b>→ {formatLength(change.afterMm,displayUnit,showUnit)}</b><em>{auditPreview.conflictIds.includes(change.id)?"手动冲突":change.reason}</em></button>):<div className="audit-empty-result">所有数字已经符合当前精度与尺寸关系，可直接标记为已核准。</div>}</div>
+        </div>
+        <div className="audit-footer"><span>取整精度 {roundingStepMm} mm · 应用后可一键撤销</span><div><button onClick={()=>setAuditPreview(null)}>取消</button><button className="primary" disabled={Boolean(auditPreview.conflictIds.length)} onClick={applyAudit}>{auditPreview.conflictIds.length?"请先解决冲突":"应用核准"}</button></div></div>
+      </div>
+    </div>}
     {toast&&<button className="toast" onClick={()=>setToast("")}>{toast.replace("已复制透明 PNG","已复制白色图布 PNG")}<span>×</span></button>}
   </main>;
 }
