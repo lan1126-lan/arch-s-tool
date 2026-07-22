@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, PointerEvent as ReactPointerEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { initAnalytics, trackEvent } from "./analytics";
 
 type Point = { x: number; y: number };
 type Line = { id: string; start: Point; end: Point };
@@ -223,6 +224,8 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const boardPadding = plan ? Math.round(Math.max(plan.naturalWidth,plan.naturalHeight)*.22) : 0;
 
+  useEffect(() => { initAnalytics(); }, []);
+
   const allLines = useMemo(() => [
     ...(calibration ? [calibration] : []),
     ...measurements,
@@ -265,10 +268,12 @@ export default function Home() {
   const commitPlan = useCallback((image: HTMLImageElement, imageFile: File) => {
     const defaultFontSize=Math.round(Math.max(17,Math.min(400,Math.min(image.naturalWidth,image.naturalHeight)/1000*1.8*8.5)));
     setPlan(image); setFile(imageFile); setCandidate(null); setCalibration(null); setMeasurements([]); setScaleMmPerPixel(null); setActiveStart(null); setActiveEnd(null); setChainVector(null); setSelectedId(null); setDimensionFontSize(defaultFontSize); setTool("calibrate"); setZoom(1); setPan({x:0,y:0}); setToast("图纸已载入：R 校准比例，F8 正交，F3 对象吸附");
+    trackEvent("image_ready");
   }, []);
 
-  const loadFile = useCallback((nextFile: File) => {
-    if (!nextFile.type.startsWith("image/")) return setToast("请上传 PNG、JPG 或 WebP 图片");
+  const loadFile = useCallback((nextFile: File, source: "upload" | "clipboard") => {
+    if (!nextFile.type.startsWith("image/")) { trackEvent("image_rejected", source); return setToast("请上传 PNG、JPG 或 WebP 图片"); }
+    trackEvent("image_selected", source);
     const url = URL.createObjectURL(nextFile); const image = new Image();
     image.onload = () => { setCandidate({image,file:nextFile}); URL.revokeObjectURL(url); };
     image.src = url;
@@ -278,7 +283,7 @@ export default function Home() {
     if(!navigator.clipboard?.read)return setToast("当前浏览器不支持按钮读取，请直接按 Ctrl+V / ⌘V 粘贴图片");
     try{
       const items=await navigator.clipboard.read();
-      for(const item of items){const type=item.types.find(value=>value.startsWith("image/"));if(type){loadFile(clipboardImageFile(await item.getType(type)));return;}}
+      for(const item of items){const type=item.types.find(value=>value.startsWith("image/"));if(type){loadFile(clipboardImageFile(await item.getType(type)),"clipboard");return;}}
       setToast("剪贴板里没有图片，请先复制图片或截屏");
     }catch{setToast("未获得剪贴板权限，请直接按 Ctrl+V / ⌘V 粘贴图片");}
   },[loadFile]);
@@ -289,13 +294,14 @@ export default function Home() {
       if(target?.matches("input,textarea,select")||target?.isContentEditable)return;
       const image=Array.from(event.clipboardData?.items??[]).find(item=>item.type.startsWith("image/"))?.getAsFile();
       if(!image)return;
-      event.preventDefault();loadFile(clipboardImageFile(image));
+      event.preventDefault();loadFile(clipboardImageFile(image),"clipboard");
     };
     window.addEventListener("paste",handlePaste);return()=>window.removeEventListener("paste",handlePaste);
   },[loadFile]);
 
   const applyCrop = (rect: CropRect) => {
     if (!candidate) return;
+    trackEvent("crop_decision", "cropped");
     const x=Math.max(0,Math.round(rect.x)), y=Math.max(0,Math.round(rect.y));
     const w=Math.min(candidate.image.naturalWidth-x,Math.round(rect.w)), h=Math.min(candidate.image.naturalHeight-y,Math.round(rect.h));
     const output=document.createElement("canvas"); output.width=w; output.height=h;
@@ -334,6 +340,7 @@ export default function Home() {
 
   const completeDimension = (line: Dimension) => {
     setMeasurements(items=>[...items,line]);setSelectedId(line.id);
+    trackEvent("dimension_created", tool, measurements.length + 1);
     setActiveEnd(null);
     if(tool==="chain")setActiveStart(line.end); else setActiveStart(null);
   };
@@ -363,7 +370,7 @@ export default function Home() {
     const resolved=resolvePoint(raw,activeStart,event.shiftKey); setHoverPoint(resolved.point); setSnap(resolved.snap);
   };
 
-  const switchTool=useCallback((next:Tool)=>{ if(next!=="select"&&next!=="calibrate"&&!scaleMmPerPixel)return; setTool(next);setActiveStart(null);setActiveEnd(null);setChainVector(null);setSnap(null); },[scaleMmPerPixel]);
+  const switchTool=useCallback((next:Tool)=>{ if(next!=="select"&&next!=="calibrate"&&!scaleMmPerPixel)return; setTool(next);setActiveStart(null);setActiveEnd(null);setChainVector(null);setSnap(null);trackEvent("tool_selected",next); },[scaleMmPerPixel]);
 
   useEffect(()=>{
     const down=(event:KeyboardEvent)=>{
@@ -387,7 +394,7 @@ export default function Home() {
     window.addEventListener("keydown",down);window.addEventListener("keyup",up);return()=>{window.removeEventListener("keydown",down);window.removeEventListener("keyup",up);};
   },[tool,selectedId,resetView,switchTool]);
 
-  const confirmCalibration=()=>{if(!pendingCalibration)return;const actual=Number(knownLength)*UNIT_FACTOR[knownUnit];if(!actual||actual<=0)return setToast("请输入大于 0 的实际尺寸");setCalibration(pendingCalibration);setScaleMmPerPixel(actual/dist(pendingCalibration.start,pendingCalibration.end));setPendingCalibration(null);setTool("measure");setToast("比例已校准。D 单段标注，C 连续逐点标注");};
+  const confirmCalibration=()=>{if(!pendingCalibration)return;const actual=Number(knownLength)*UNIT_FACTOR[knownUnit];if(!actual||actual<=0)return setToast("请输入大于 0 的实际尺寸");setCalibration(pendingCalibration);setScaleMmPerPixel(actual/dist(pendingCalibration.start,pendingCalibration.end));setPendingCalibration(null);setTool("measure");setToast("比例已校准。D 单段标注，C 连续逐点标注");trackEvent("calibration_complete",knownUnit);};
 
   const onWheel=(event:WheelEvent<HTMLDivElement>)=>{if(!plan)return;event.preventDefault();const r=event.currentTarget.getBoundingClientRect();const px=event.clientX-r.left-r.width/2,py=event.clientY-r.top-r.height/2;const factor=Math.exp(-event.deltaY*.0012);const next=Math.max(.2,Math.min(8,zoom*factor));const ratio=next/zoom;setPan({x:px-(px-pan.x)*ratio,y:py-(py-pan.y)*ratio});setZoom(next);};
   const onStagePointerDown=(event:ReactPointerEvent<HTMLDivElement>)=>{if(event.button===1||spaceRef.current){event.preventDefault();event.currentTarget.setPointerCapture(event.pointerId);setPanning(true);panRef.current={x:event.clientX,y:event.clientY,panX:pan.x,panY:pan.y};}};
@@ -405,7 +412,7 @@ export default function Home() {
     return output;
   };
 
-  const exportImage=async(mode:"copy"|"save")=>{const output=renderExportCanvas();if(!output||!file)return;const blob=await new Promise<Blob|null>(resolve=>output.toBlob(resolve,"image/png"));if(!blob)return;if(mode==="copy"){try{await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]);setToast("已复制透明 PNG，可直接粘贴到 PPT、Figma 或微信");}catch{setToast("浏览器未允许复制图片，请使用保存 PNG");}return;}const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`${file.name.replace(/\.[^.]+$/,"")}-已标注.png`;a.click();URL.revokeObjectURL(url);setToast("PNG 已保存到本地");};
+  const exportImage=async(mode:"copy"|"save")=>{const output=renderExportCanvas();if(!output||!file)return;const blob=await new Promise<Blob|null>(resolve=>output.toBlob(resolve,"image/png"));if(!blob)return;if(mode==="copy"){try{await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]);setToast("已复制透明 PNG，可直接粘贴到 PPT、Figma 或微信");trackEvent("export_success","copy",measurements.length);}catch{setToast("浏览器未允许复制图片，请使用保存 PNG");trackEvent("export_failed","copy");}return;}const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`${file.name.replace(/\.[^.]+$/,"")}-已标注.png`;a.click();URL.revokeObjectURL(url);setToast("PNG 已保存到本地");trackEvent("export_success","save",measurements.length);};
 
   const draftCommand=tool==="select"?selectedId?"已选择标注：按 Delete 删除":"选择标注对象":activeEnd?"第三点：自由指定尺寸线位置":activeStart?(tool==="calibrate"?"校准比例：指定第二点":tool==="chain"&&chainVector?"逐点标注：指定下一点（单击生成）":"指定第二个测量点"):tool==="calibrate"?"校准比例：指定第一点":tool==="chain"?"逐点标注：第一段指定起点":"线性标注：指定第一个测量点";
   const snapScreen=useMemo(()=>{if(!snap||!plan)return null;const scale=fitScale*zoom;const boardW=plan.naturalWidth+boardPadding*2,boardH=plan.naturalHeight+boardPadding*2;return{x:stageSize.w/2+pan.x-boardW*scale/2+(snap.point.x+boardPadding)*scale,y:stageSize.h/2+pan.y-boardH*scale/2+(snap.point.y+boardPadding)*scale};},[snap,plan,boardPadding,fitScale,zoom,pan,stageSize]);
@@ -435,8 +442,8 @@ export default function Home() {
 
       <footer className="cad-status"><div><button className={ortho?"on":""} onClick={()=>setOrtho(v=>!v)}><b>F8</b> 正交</button><button className={osnap?"on":""} onClick={()=>setOsnap(v=>!v)}><b>F3</b> 对象捕捉</button><span>十字光标</span></div><div><span>{measurements.length} 条尺寸</span><span>{Math.round(fitScale*zoom*100)}%</span><button onClick={resetView}>适合窗口</button></div></footer>
     </section>
-    <input ref={fileInputRef} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(e:ChangeEvent<HTMLInputElement>)=>{const f=e.target.files?.[0];if(f)loadFile(f);e.target.value="";}}/>
-    {candidate&&<CropDialog candidate={candidate} onCancel={()=>setCandidate(null)} onUseOriginal={()=>commitPlan(candidate.image,candidate.file)} onCrop={applyCrop}/>} 
+    <input ref={fileInputRef} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(e:ChangeEvent<HTMLInputElement>)=>{const f=e.target.files?.[0];if(f)loadFile(f,"upload");e.target.value="";}}/>
+    {candidate&&<CropDialog candidate={candidate} onCancel={()=>{trackEvent("crop_decision","cancelled");setCandidate(null);}} onUseOriginal={()=>{trackEvent("crop_decision","original");commitPlan(candidate.image,candidate.file);}} onCrop={applyCrop}/>}
     {toast&&<button className="toast" onClick={()=>setToast("")}>{toast.replace("已复制透明 PNG","已复制白色图布 PNG")}<span>×</span></button>}
   </main>;
 }

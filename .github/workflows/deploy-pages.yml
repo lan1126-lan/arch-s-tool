@@ -37,6 +37,7 @@ jobs:
         run: npx next build
         env:
           GITHUB_PAGES: "true"
+          NEXT_PUBLIC_BAIDU_TONGJI_ID: ${{ secrets.BAIDU_TONGJI_ID }}
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v4
