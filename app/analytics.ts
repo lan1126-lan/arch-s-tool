@@ -5,7 +5,9 @@ declare global {
   }
 }
 
-const BAIDU_TONGJI_ID = process.env.NEXT_PUBLIC_BAIDU_TONGJI_ID?.trim();
+const DEFAULT_BAIDU_TONGJI_ID = "bc84704f8735c1b55b25889f9ff68c7f";
+const BAIDU_TONGJI_ID =
+  process.env.NEXT_PUBLIC_BAIDU_TONGJI_ID?.trim() || DEFAULT_BAIDU_TONGJI_ID;
 const EVENT_CATEGORY = "kedu_plan_tool";
 
 export function initAnalytics() {
